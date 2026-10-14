@@ -34,7 +34,7 @@ function normalizeList(raw) {
   let s = raw.trim().toLowerCase().replace(/\.txt$/, "").replace(/-/g, "_");
   // 兼容 trackers_best / trackers-all-udp 这类全名
   s = s.replace(/^trackers_/, "");
-  if (s === "" || s === "aria2") return "all";
+  if (s === "") return "all";
   if (LISTS[s]) return s;
   if (ALIASES[s]) return ALIASES[s];
   return null;
@@ -42,10 +42,17 @@ function normalizeList(raw) {
 
 function helpText() {
   return [
-    "trackers-to-aria2",
+    "   __                  __                        __                         _      ___",
+    "  / /__________ ______/ /_____  __________      / /_____        ____ ______(_)___ |__ \\",
+    " / __/ ___/ __ `/ ___/ //_/ _ \\/ ___/ ___/_____/ __/ __ \\______/ __ `/ ___/ / __ `/_/ /",
+    "/ /_/ /  / /_/ / /__/ ,< /  __/ /  (__  )_____/ /_/ /_/ /_____/ /_/ / /  / / /_/ / __/",
+    "\\__/_/   \\__,_/\\___/_/|_|\\___/_/  /____/      \\__/\\____/      \\__,_/_/  /_/\\__,_/____/",
+    "",
     "",
     "Usage:",
-    "  /?list=<id>&format=<fmt>   /<id>?format=<fmt>   /aria2/<id>",
+    "  /?list=<id>&format=<fmt>   /<id>?format=<fmt>",
+    "",
+    "根路径 /（无 list 参数）返回本提示；带路径或 list 参数才输出 tracker。",
     "",
     "list id:",
     `  ${Object.keys(LISTS).join(", ")}`,
@@ -60,7 +67,6 @@ function helpText() {
     "Examples:",
     "  /?list=all_udp",
     "  /best?format=aria2",
-    "  /aria2/all_udp",
     "  /?list=best_ip&format=json",
   ].join("\n");
 }
@@ -106,6 +112,15 @@ export default {
         },
       });
     }
+    // 拒绝爬虫：内嵌 robots.txt，避免引入静态资源配置
+    if (lowerPath === "robots.txt") {
+      return new Response(isHead ? null : "User-agent: *\nDisallow: /\n", {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "access-control-allow-origin": "*",
+        },
+      });
+    }
     // ?help 空值/真值才出帮助；?help=0/false/no/off 视为普通请求放行
     const helpVal = url.searchParams.get("help");
     const wantHelp =
@@ -122,22 +137,8 @@ export default {
     }
 
     // ---- 解析 list ----
+    // format 先校验：裸 `/` 也不跳过，`/?format=yaml` 同样 400
     let format = (url.searchParams.get("format") || "").trim().toLowerCase();
-
-    // 兼容旧路由 /aria2：精确匹配或 aria2/ 前缀，大小写不敏感
-    let listRaw = url.searchParams.get("list") ||
-      url.searchParams.get("type") ||
-      url.searchParams.get("file");
-
-    const isAria2Route =
-      lowerPath === "aria2" || lowerPath.startsWith("aria2/");
-    if (isAria2Route) {
-      if (!format) format = "aria2";
-      const rest = pathname.slice("aria2".length).replace(/^\/+/, "");
-      if (!listRaw) listRaw = rest || "all";
-    } else if (!listRaw) {
-      listRaw = pathname || "all";
-    }
     if (!format) format = "comma";
     if (!["comma", "aria2", "lines", "json"].includes(format)) {
       return errorRes(
@@ -145,6 +146,26 @@ export default {
         400,
         method
       );
+    }
+
+    let listRaw = url.searchParams.get("list") ||
+      url.searchParams.get("type") ||
+      url.searchParams.get("file");
+
+    // 裸 `/`（无路径、无 list/type/file 参数）返回使用提示；
+    // ?help=0/false/no/off 显式拒绝帮助时除外，按普通请求（默认 all）处理
+    const helpOptOut = helpVal !== null &&
+      ["0", "false", "no", "off"].includes(helpVal.trim().toLowerCase());
+    if (!pathname && !listRaw && !helpOptOut) {
+      return new Response(isHead ? null : helpText() + "\n", {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "access-control-allow-origin": "*",
+        },
+      });
+    }
+    if (!listRaw) {
+      listRaw = pathname || "all";
     }
 
     const id = normalizeList(listRaw);
@@ -191,7 +212,7 @@ export default {
 
       let body, contentType = "text/plain; charset=utf-8";
       if (format === "aria2") {
-        body = `bt-tracker=${trackers.join(",")}`;
+        body = `${trackers.join(",")}`;
       } else if (format === "lines") {
         body = trackers.length ? trackers.join("\n") + "\n" : "";
       } else if (format === "json") {
